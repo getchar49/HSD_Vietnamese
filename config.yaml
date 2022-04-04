@@ -1,0 +1,7 @@
+HATESPEECH:
+  envibert_path: EnviBERT_model/enviBERT
+  phobert_path: vinai/phobert-base
+  rnn_path: 
+  envibert_weight: EnviBERT_model/weights/spoken_form_EnviBERT_model_v4.pt
+  phobert_weight: PhoBERT_model/weights/spoken_form_phoBert_model_v3.pt
+  rnn_weight: RNN_model/weights/spoken_form_RNN_model_200d_v4.pt
