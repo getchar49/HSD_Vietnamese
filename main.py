@@ -1,41 +1,58 @@
 import argparse
 import torch
 import random
+import transformers
 from transformers import AutoTokenizer, AutoModel
-from DeBerta_model.model import BertCNN as bertmodel
+#from DeBerta_model.model import BertCNN as bertmodel
+from DeBerta_model.model import LinearBert as bertmodel
 from transformers.models.deberta_v2.tokenization_deberta_v2 import DebertaV2Tokenizer
 import numpy as np
-from torch.nn import BCEWithLogitsLoss
+from torch.nn import BCEWithLogitsLoss, BCELoss
 import logging
 import re
 from torch.optim.lr_scheduler import LambdaLR
 from sklearn.metrics import multilabel_confusion_matrix
 from sklearn.metrics import f1_score
-record = {'loss':[],'avg_loss':[],'val_acc':[],'optim':None,'sche':None,'epoch':None,'total_loss':None,'best_acc':0.24}
+import pandas
+device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+#record = {'loss':[],'avg_loss':[],'val_acc':[],'optim':None,'sche':None,'epoch':None,'total_loss':None,'best_acc':0.24}
+
+params = {
+    'dropout': {0,0.1,0.15},
+    'warmup': {50,100,500,1000},
+    'lr': {1.5e-5,2e-5, 2.5e-5, 3e-5},
+    'batch_size': {16,32,48,64}
+}
+
+torch.manual_seed(0)
+np.random.seed(0)
 
 #path = "/home/nghianv/NLP/HSD/hatespeech-detection/deberta"
-path = "/content/HSD_Vietnamese/deberta"
+path = "/home/nghianv/NLP/HSD/hatespeech-detection/deberta"
+save_path = "/home/nghianv/NLP/HSD/hatespeech-detection/save"
+data_path = "/home/nghianv/NLP/HSD/33_vn_hatespeech/Datasets"
 num_labels = 7
-model = bertmodel(num_labels,path,max_len=512)
+model = bertmodel(num_labels,path,max_len=384)
 layers = model.backbone.config.num_hidden_layers
 #model = AutoModel.from_pretrained(path)
 #print(model)
-tokenizer = DebertaV2Tokenizer.from_pretrained(path)
+tokenizer = AutoTokenizer.from_pretrained(path)
+#tokenizer = DebertaV2Tokenizer.from_pretrained(path)
 #tokenizer = AutoTokenizer.from_pretrained(path)
 #print(tokenizer)
 
-import pandas
 
-record = {'loss':[],'avg_loss':[],'val_acc':[],'optim':None,'sche':None,'epoch':None,'total_loss':0,'best_acc':0}
 
-df = pandas.read_csv("/content/drive/MyDrive/Colab Notebooks/HSD/data/train_v9.csv")
+record = {'loss':[],'avg_loss':[],'val_acc':[],'optim':None,'sche':None,'epoch':None,'total_loss':0,'best_acc':0,'score':[]}
+
+df = pandas.read_csv(data_path+"/train_v9.csv")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--epoch", type=int, default=10)
 parser.add_argument("--split_layer", type=int, default=3)
 parser.add_argument("--lr", type=float, default=2.0e-5)
-parser.add_argument("--max_grad_norm", type=float, default=0.2)
+parser.add_argument("--max_grad_norm", type=float, default=1.0)
 parser.add_argument(
     "--warmup_proportion",
     type=float,
@@ -49,7 +66,7 @@ parser.add_argument(
 parser.add_argument(
     "--gradient_accumulation_steps",
     type=int,
-    default=3,
+    default=1,
     help="Number of updates steps to accumulate before performing a backward/update pass.",
 )
 args = parser.parse_args()
@@ -146,44 +163,73 @@ total_data = []
 #print(df.shape)
 #print(df.iloc[df.size-1,:])
 #print(df.shape)
+#arr = np.zeros(1500)
+cout = torch.zeros(7) * 1.0
 for i in range(df.shape[0]):
     row_i = df.iloc[i,:].to_list()
     text = row_i[0]
     label = row_i[1:]
+    cout += torch.FloatTensor(label)
+    #print(dir(tokenizer))
     encoded = tokenizer.encode_plus(text)
+    # if (len(encoded)==1242):
+    #     print(text)
+    #arr[len(encoded)] += 1
+    #max_len = max(max_len,len(encoded))
     total_data.append({
         'input_ids':encoded.input_ids,
         'token_type_ids':encoded.token_type_ids,
         'attention_mask':encoded.attention_mask,
         'label':label
     })
-random.shuffle(total_data)
+#print(cout)
+class_weight = cout / df.shape[0]
+class_weight = (1-class_weight)/class_weight
+class_weight = (torch.ones(7))*1
+scale = ((class_weight**2+1)/2)**0.5
+
+scale = scale.requires_grad_(False).to(device)
+class_weight = class_weight.requires_grad_(False).to(device)
+print(scale)
+class_weight = (torch.ones(7)*4).to(device)
+print(class_weight)
+#random.shuffle(total_data)
 print("Length total data: ",len(total_data))
 val_data = total_data[:len(total_data)//10]
 train_data = total_data[len(total_data)//10:]
 #data = train_data[0:200]
-optimizer = optim(layers,args.lr,model,args.alpha,split_layers=args.split_layer)
+#optimizer = optim(layers,args.lr,model,args.alpha,split_layers=args.split_layer)
 total_steps = len(train_data) * args.epoch // (args.gradient_accumulation_steps * args.batch_size)
-scheduler = get_linear_schedule_with_warmup(optimizer,int(args.warmup_proportion*total_steps),total_steps)
-device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+#scheduler = get_linear_schedule_with_warmup(optimizer,int(args.warmup_proportion*total_steps),total_steps)
+
 #device = 'cpu'
-batch_size = 4
+batch_size = 16
 total_loss = 0.
 cur_loss = 0.
 step = 0
 cur_epo = 0
 #memory = [0]
 model = model.to(device)
-#total = 500
+#total = 5000
 total = len(train_data)
 print("Total: ",total)
 total_val = len(val_data)
+
+optimizer = transformers.AdamW(model.parameters(),lr=2e-5,weight_decay=0.01)
+scheduler = get_linear_schedule_with_warmup(optimizer,500,total_steps)
+#scheduler = get_linear_schedule_with_warmup(optimizer,int(args.warmup_proportion*total_steps),total_steps)
+criterion = BCEWithLogitsLoss(pos_weight = class_weight)
+def loss_function(x,y):
+    #print((class_weight*y*torch.log(x) + (1-y)*torch.log(1-x))/scale)
+    return -torch.mean((class_weight*y*torch.log(x) + (1-y)*torch.log(1-x))/scale)
+sigmoid = torch.nn.Sigmoid()
 for epo in range(cur_epo,args.epoch):
-  total_losses = [0]
+  model = model.to(device)
+  batch_size = 16
+  prev_total_loss = (0,0)
   model.train()
   random.shuffle(train_data)
   for i in range(0,total,batch_size):
-    total_losses = total_losses[-51:]
     data = train_data[i:i+batch_size]
     input_ids = [d['input_ids'] for d in data]
     #print(tokenizer.decode(data[0]['input_ids']))
@@ -192,18 +238,30 @@ for epo in range(cur_epo,args.epoch):
     token_type_ids = [d['token_type_ids'] for d in data]
     attention_mask = [d['attention_mask'] for d in data]
     label = torch.FloatTensor([d['label'] for d in data])
-    input_ids, attention_mask,token_type_ids = padding(input_ids, pads=tokenizer.pad_token_id, max_len=512,attention_mask = attention_mask, token_type_ids = token_type_ids)
+    input_ids, attention_mask,token_type_ids = padding(input_ids, pads=tokenizer.pad_token_id, max_len=256,attention_mask = attention_mask, token_type_ids = token_type_ids)
     #print(data)
     input_ids = torch.LongTensor(input_ids).to(device)
     attention_mask = torch.LongTensor(attention_mask).to(device) if attention_mask is not None else None
     token_type_ids = torch.LongTensor(token_type_ids).to(device) if token_type_ids is not None else None
     label = label.to(device) if label is not None else None
-    out =model(input_ids,token_type_ids,attention_mask)
-    #print(out[0].shape)
-    #print(out)
+    #print(input_ids.shape)
+    out =model(input_ids,attention_mask = attention_mask,token_type_ids = token_type_ids)
     #print(label)
-    criterion = BCEWithLogitsLoss()
-    loss = criterion(out,label)
+    #print(out)
+    #print(out[0].shape)
+    #out = torch.clamp(out,-100,100)
+    # if (i%500==0):
+    #     print(i)
+    #     print(out)
+    #     print(label)
+        #print(scale)
+        #print(class_weight)
+    
+    #loss = loss_function(out,label)
+    loss = loss_function(out,label)
+    #loss = criterion(out,label)
+    #loss = loss/scale
+    #print(loss)
     #print(loss)
     loss.backward()
     if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -214,52 +272,66 @@ for epo in range(cur_epo,args.epoch):
                 scheduler.step()
     step += 1
     #print(loss)
-    total_loss += loss
+    total_loss += float(loss.cpu())
     #print(total_loss)
     avg_loss = total_loss/step
-    total_losses.append(total_loss)
+    #total_losses.append(total_loss)
     #print(total_loss)
-    if (step%50==0): 
+    x = 50
+    if (step%x==0): 
       #print(step)
       #x = memory[-1]  
-      print(total_losses)  
-      print("Step {}: Avg loss: {} Cur avg loss: {}".format(step,avg_loss,loss))
+      #print(total_losses)  
+      #print(total_losses)
+      print("Step {}/{}: Avg loss: {} Cur avg loss: {}".format(step*batch_size,total,avg_loss,(total_loss-prev_total_loss[0])/x))
       #print(total_loss,prev_total_loss)
       #memory.append(total_loss)
-      #prev_total_loss = total_loss
+      prev_total_loss = (total_loss,step*batch_size)
       #memory = memory[-5:]
-    
+  print("Step {}/{}: Avg loss: {} Cur avg loss: {}".format(total,total,total_loss/((total+1)//batch_size),(total_loss-prev_total_loss[0])/((total-prev_total_loss[1]+1)//batch_size)))
   step = 0
   total_loss = 0
   prev_total_loss = 0
   model.eval()
   result = torch.zeros((7,2,2))
-  for i in range(0,total_val,batch_size):
-    data = val_data[i:i+batch_size]
-    input_ids = [d['input_ids'] for d in data]
-    #print(tokenizer.decode(data[0]['input_ids']))
-    #print(data[0]['label'])
-    #print(input_ids.shape)
-    token_type_ids = [d['token_type_ids'] for d in data]
-    attention_mask = [d['attention_mask'] for d in data]
-    label = torch.LongTensor([d['label'] for d in data])
-    input_ids, attention_mask,token_type_ids = padding(input_ids, pads=tokenizer.pad_token_id, max_len=512,attention_mask = attention_mask, token_type_ids = token_type_ids)
-    #print(data)
-    input_ids = torch.LongTensor(input_ids).to(device)
-    attention_mask = torch.LongTensor(attention_mask).to(device) if attention_mask is not None else None
-    token_type_ids = torch.LongTensor(token_type_ids).to(device) if token_type_ids is not None else None
-    out =model(input_ids,token_type_ids,attention_mask)
-    pred = (out>0.5).long().cpu()
-    result += multilabel_confusion_matrix(label,pred)
+  batch_size = 2
+  with torch.no_grad():
+    model = model.cpu()
+    for i in range(0,total_val,batch_size):
+        data = val_data[i:i+batch_size]
+        input_ids = [d['input_ids'] for d in data]
+        #print(tokenizer.decode(data[0]['input_ids']))
+        #print(data[0]['label'])
+        #print(input_ids.shape)
+        token_type_ids = [d['token_type_ids'] for d in data]
+        attention_mask = [d['attention_mask'] for d in data]
+        label = torch.LongTensor([d['label'] for d in data])
+        input_ids, attention_mask,token_type_ids = padding(input_ids, pads=tokenizer.pad_token_id, max_len=256,attention_mask = attention_mask, token_type_ids = token_type_ids)
+        #print(data)
+        input_ids = torch.LongTensor(input_ids)
+        attention_mask = torch.LongTensor(attention_mask) if attention_mask is not None else None
+        token_type_ids = torch.LongTensor(token_type_ids) if token_type_ids is not None else None
+        out =model(input_ids,attention_mask = attention_mask,token_type_ids = token_type_ids)
+        #print("Output: ",out)
+        #print("Label: ",label)
+        #if(i%10==0):
+        #    print(label)
+        #    print(out)
+        pred = (out>0.5).long()
+        
+        result += multilabel_confusion_matrix(label,pred)
   f1_scores = torch.zeros(result.shape[0])
   for i in range(result.shape[0]):
     f1_scores[i] = result[i][1][1]*2/(result[i][1][1]*2+result[i][0][1]+result[i][1][0])
-  print("Epoch {} result:".format(epo))
+  print("Epoch {} result:".format(epo+1))
   print(result)
   print(f1_scores)
-  with open('/content/drive/MyDrive/Colab Notebooks/HSD/save/model.pt', 'wb') as f:
+  with open(save_path+'/model_{}.pt'.format(epo), 'wb') as f:
     state_dict = model.state_dict()
     torch.save(state_dict, f)
-  
+  record['optim'] = optimizer.state_dict()
+  record['sche'] = scheduler.state_dict()
+  record['score'].append(f1_scores)
+  with open(save_path+'/record_{}.pt'.format(epo),'wb') as f:
+    torch.save(record,f)
 #print(criterion(out,label))
-
