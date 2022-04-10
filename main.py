@@ -3,8 +3,8 @@ import torch
 import random
 import transformers
 from transformers import AutoTokenizer, AutoModel
-#from DeBerta_model.model import BertCNN as bertmodel
-from DeBerta_model.model import LinearBert as bertmodel
+from DeBerta_model.model import BertCNN as bertmodel
+#from DeBerta_model.model import LinearBert as bertmodel
 from transformers.models.deberta_v2.tokenization_deberta_v2 import DebertaV2Tokenizer
 import numpy as np
 from torch.nn import BCEWithLogitsLoss, BCELoss
@@ -185,13 +185,13 @@ for i in range(df.shape[0]):
 #print(cout)
 class_weight = cout / df.shape[0]
 class_weight = (1-class_weight)/class_weight
-class_weight = (torch.ones(7))*1
+#class_weight = (torch.ones(7))*1
 scale = ((class_weight**2+1)/2)**0.5
 
 scale = scale.requires_grad_(False).to(device)
 class_weight = class_weight.requires_grad_(False).to(device)
-print(scale)
-class_weight = (torch.ones(7)*4).to(device)
+#print(scale)
+#class_weight = (torch.ones(7)*4).to(device)
 print(class_weight)
 #random.shuffle(total_data)
 print("Length total data: ",len(total_data))
@@ -326,12 +326,12 @@ for epo in range(cur_epo,args.epoch):
   print("Epoch {} result:".format(epo+1))
   print(result)
   print(f1_scores)
-  with open(save_path+'/model_{}.pt'.format(epo), 'wb') as f:
+  with open(save_path+'/model_{}.pt'.format(0), 'wb') as f:
     state_dict = model.state_dict()
     torch.save(state_dict, f)
   record['optim'] = optimizer.state_dict()
   record['sche'] = scheduler.state_dict()
   record['score'].append(f1_scores)
-  with open(save_path+'/record_{}.pt'.format(epo),'wb') as f:
+  with open(save_path+'/record_{}.pt'.format(0),'wb') as f:
     torch.save(record,f)
 #print(criterion(out,label))
