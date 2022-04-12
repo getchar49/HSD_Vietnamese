@@ -28,9 +28,9 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 #path = "/home/nghianv/NLP/HSD/hatespeech-detection/deberta"
-path = "/home/nghianv/NLP/HSD/hatespeech-detection/deberta"
-save_path = "/home/nghianv/NLP/HSD/hatespeech-detection/save"
-data_path = "/home/nghianv/NLP/HSD/33_vn_hatespeech/Datasets"
+path = "/content/HSD_Vietnamese/deberta"
+save_path = "/content/drive/MyDrive/Colab Notebooks/HSD/save"
+data_path = "/content/drive/MyDrive/Colab Notebooks/HSD/data"
 num_labels = 7
 model = bertmodel(num_labels,path,max_len=384)
 layers = model.backbone.config.num_hidden_layers
@@ -157,6 +157,39 @@ def padding(sequence, pads=0, max_len=None, dtype='int32',attention_mask = None,
         if global_attention_mask is not None:
             x_global_attention_mask[idx,:len(trunc)] = global_attention_mask[idx][:max_len]
     return x, x_attention_mask, x_token_type_ids
+    
+def optim(n_layers,lr,model,alpha=5.,split_layers=12):
+    params = dict(model.named_parameters())
+    layer_params =  [] 
+    for _ in range(n_layers):
+        layer_params.append([])
+    
+    layer_params[0].extend(list(model.encoder.embeddings.parameters()))
+    for key,value in params.items():
+        layer = re.findall(r"encoder\.encoder\.layer\.(.*?)\.",key)
+        if len(layer) == 1:    
+            exec("layer_params[{}].append(value)".format(int(layer[0])))
+
+    for key,value in params.items():
+        if "predictions." in key:
+            layer_params[-1].append(value)
+        if "denses." in key:
+            layer_params[-1].append(value)
+    layer_params[-1].extend(list(model.encoder.pooler.parameters()))
+   
+    length = [len(p) for p in layer_params]
+    assert sum(length) == len(params)
+
+    params_list = []
+    one_layer_block_num = n_layers/split_layers 
+    for i,layer_param in enumerate(layer_params):
+        m = alpha ** (split_layers-i//one_layer_block_num-1)
+        params_list.append({'params':layer_param,'lr':lr/m})
+    #print(params_list)
+    optimizer2 = torch.optim.AdamW(params_list,
+                                  weight_decay=0.01)
+    #print(optimizer2)
+    return optimizer2 
 
 total_data = []
 #print(dir(df))
@@ -185,7 +218,7 @@ for i in range(df.shape[0]):
 #print(cout)
 class_weight = cout / df.shape[0]
 class_weight = (1-class_weight)/class_weight
-#class_weight = (torch.ones(7))*1
+class_weight = (torch.ones(7))*1
 scale = ((class_weight**2+1)/2)**0.5
 
 scale = scale.requires_grad_(False).to(device)
@@ -296,7 +329,7 @@ for epo in range(cur_epo,args.epoch):
   result = torch.zeros((7,2,2))
   batch_size = 2
   with torch.no_grad():
-    model = model.cpu()
+    #model = model.cpu()
     for i in range(0,total_val,batch_size):
         data = val_data[i:i+batch_size]
         input_ids = [d['input_ids'] for d in data]
@@ -308,29 +341,29 @@ for epo in range(cur_epo,args.epoch):
         label = torch.LongTensor([d['label'] for d in data])
         input_ids, attention_mask,token_type_ids = padding(input_ids, pads=tokenizer.pad_token_id, max_len=256,attention_mask = attention_mask, token_type_ids = token_type_ids)
         #print(data)
-        input_ids = torch.LongTensor(input_ids)
-        attention_mask = torch.LongTensor(attention_mask) if attention_mask is not None else None
-        token_type_ids = torch.LongTensor(token_type_ids) if token_type_ids is not None else None
+        input_ids = torch.LongTensor(input_ids).to(device)
+        attention_mask = torch.LongTensor(attention_mask).to(device) if attention_mask is not None else None
+        token_type_ids = torch.LongTensor(token_type_ids).to(device) if token_type_ids is not None else None
         out =model(input_ids,attention_mask = attention_mask,token_type_ids = token_type_ids)
         #print("Output: ",out)
         #print("Label: ",label)
         #if(i%10==0):
         #    print(label)
         #    print(out)
-        pred = (out>0.5).long()
+        pred = (out>0.5).long().cpu()
         
         result += multilabel_confusion_matrix(label,pred)
   f1_scores = torch.zeros(result.shape[0])
   for i in range(result.shape[0]):
     f1_scores[i] = result[i][1][1]*2/(result[i][1][1]*2+result[i][0][1]+result[i][1][0])
   print("Epoch {} result:".format(epo+1))
-  print(result)
+  print(result.long())
   print(f1_scores)
   with open(save_path+'/model_{}.pt'.format(0), 'wb') as f:
     state_dict = model.state_dict()
     torch.save(state_dict, f)
-  record['optim'] = optimizer.state_dict()
-  record['sche'] = scheduler.state_dict()
+  #record['optim'] = optimizer.state_dict()
+  #record['sche'] = scheduler.state_dict()
   record['score'].append(f1_scores)
   with open(save_path+'/record_{}.pt'.format(0),'wb') as f:
     torch.save(record,f)

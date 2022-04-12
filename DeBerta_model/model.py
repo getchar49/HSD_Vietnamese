@@ -18,7 +18,7 @@ class BertCNN(nn.Module):
         self.convs = nn.ModuleList([nn.Conv1d(max_len+max_len_tfidf, 256, kernel_size,padding='same') for kernel_size in [3,5,7]])
         #self.dropout = nn.Dropout(self.backbone.config.hidden_dropout_prob)
         self.dropout = nn.Dropout(0.1)
-        self.out = nn.Linear(768, self.num_labels)
+        self.out = nn.Linear(1152, self.num_labels)
         
 
     def forward(self, input_ids, attention_mask, token_type_ids):
@@ -33,11 +33,14 @@ class BertCNN(nn.Module):
         #print(hidden_outputs[-1].shape)
         sequence_output = torch.stack([hidden_outputs[-1], hidden_outputs[-2], hidden_outputs[-3]])
         sequence_output = torch.mean(sequence_output, dim=0)
+        cls_output = sequence_output[:,0,:]
+        sequence_output = sequence_output[:,1:,:]
         sequence_output = torch.transpose(sequence_output,1,2)
         #print("Sequence shape: ",sequence_output.shape)
         #print(sequence_output.shape)
         cnn = [F.relu(conv(sequence_output)) for conv in self.convs]
         max_pooling = []
+        max_pooling.append(cls_output)
         for i in cnn:
           #print(i.shape)
           max, _ = torch.max(i, 2)
