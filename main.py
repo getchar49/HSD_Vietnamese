@@ -256,6 +256,7 @@ def loss_function(x,y):
     #print((class_weight*y*torch.log(x) + (1-y)*torch.log(1-x))/scale)
     return -torch.mean((class_weight*y*torch.log(x) + (1-y)*torch.log(1-x))/scale)
 sigmoid = torch.nn.Sigmoid()
+max_f1_score = 0.
 for epo in range(cur_epo,args.epoch):
   model = model.to(device)
   batch_size = 16
@@ -362,9 +363,16 @@ for epo in range(cur_epo,args.epoch):
   with open(save_path+'/model_{}.pt'.format(0), 'wb') as f:
     state_dict = model.state_dict()
     torch.save(state_dict, f)
+  avg_f1_score = np.mean(f1_scores)
+  if (avg_f1_score>max_f1_score):
+    max_f1_score = avg_f1_score
+    with open(save_path+'/model_max.pt', 'wb') as f:
+      state_dict = model.state_dict()
+      torch.save(state_dict, f)
   #record['optim'] = optimizer.state_dict()
   #record['sche'] = scheduler.state_dict()
   record['score'].append(f1_scores)
   with open(save_path+'/record_{}.pt'.format(0),'wb') as f:
     torch.save(record,f)
 #print(criterion(out,label))
+for i in range(len(train_data)):
